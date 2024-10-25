@@ -305,30 +305,6 @@ func (m Model) Init() tea.Cmd {
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
-	case itemsLoadedMsg:
-		m.currentItems = msg.items
-		m.hasMoreItems = msg.hasMore
-		m.nextPageToken = msg.nextToken
-		m.loading = false
-		m.list.SetItems(msg.items)
-		m.list.SetHeight(len(msg.items))
-		if m.lastWindowSize.Width > 0 && m.lastWindowSize.Height > 0 {
-			m.updateListSize(m.lastWindowSize.Width, m.lastWindowSize.Height)
-		}
-
-		if len(msg.items) == 0 {
-			m.statusMsg = "Directory is empty"
-		} else if msg.hasMore {
-			m.statusMsg = fmt.Sprintf("Showing %d items (More available - press 'n' for next page)", len(msg.items))
-		} else {
-			m.statusMsg = fmt.Sprintf("Showing %d items (End of list)", len(msg.items))
-		}
-		m.showStatusMsg = true
-
-	case error:
-		m.statusMsg = fmt.Sprintf("Error: %v", msg)
-		m.showStatusMsg = true
-
 	case tea.KeyMsg:
 		if msg.String() == "ctrl+c" {
 			return m, tea.Quit
@@ -366,9 +342,36 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.loadItems,
 			)
 		}
+
 	case tea.WindowSizeMsg:
 		m.lastWindowSize = msg
 		m.updateListSize(msg.Width, msg.Height)
+	case itemsLoadedMsg:
+		m.currentItems = msg.items
+		m.hasMoreItems = msg.hasMore
+		m.nextPageToken = msg.nextToken
+		m.loading = false
+		m.list.SetItems(msg.items)
+		m.list.SetHeight(len(msg.items))
+		if m.lastWindowSize.Width > 0 && m.lastWindowSize.Height > 0 {
+			m.updateListSize(m.lastWindowSize.Width, m.lastWindowSize.Height)
+		}
+
+		if len(msg.items) == 0 {
+			m.statusMsg = "Directory is empty"
+		} else if msg.hasMore {
+			m.statusMsg = fmt.Sprintf("Showing %d items (More available - press 'n' for next page)", len(msg.items))
+		} else {
+			m.statusMsg = fmt.Sprintf("Showing %d items (End of list)", len(msg.items))
+		}
+		m.showStatusMsg = true
+
+	case viewContentMsg:
+		m.viewport.SetContent(string(msg))
+		m.viewingFile = true
+	case error:
+		m.statusMsg = fmt.Sprintf("Error: %v", msg)
+		m.showStatusMsg = true
 	}
 
 	var cmd tea.Cmd
@@ -379,8 +382,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m *Model) updateListSize(width, height int) {
 	h, v := docStyle.GetFrameSize()
 	m.list.SetSize(width-h, height-v)
-	// titleStyle := m.list.Styles.Title.Width(width - h)
-	// m.list.Styles.Title = titleStyle
 
 }
 
