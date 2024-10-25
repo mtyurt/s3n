@@ -16,6 +16,7 @@ import (
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/mtyurt/s3n/logger"
 )
 
 const PAGE_SIZE = 100
@@ -47,13 +48,19 @@ type item struct {
 }
 
 func (i item) Title() string {
-	if i.isDir {
-		return " " + i.key
+	if i.key == "" {
+		return "" // Don't show empty items
 	}
-	return " " + i.key
+	if i.isDir {
+		return "📁 " + i.key
+	}
+	return "📄 " + i.key
 }
 
 func (i item) Description() string {
+	if i.key == "" {
+		return "" // Don't show description for empty items
+	}
 	if i.isDir {
 		return "Directory"
 	}
@@ -153,8 +160,27 @@ func newKeyMap() keyMap {
 
 func initialModel(bucketName string) Model {
 	keys := newKeyMap()
-	l := list.New([]list.Item{}, list.NewDefaultDelegate(), 0, 0)
+	// Create a custom delegate
+	delegate := list.NewDefaultDelegate()
+
+	// Only show items that have a non-empty key
+	delegate.ShowDescription = true
+
+	// Create the list with empty items initially
+	l := list.New([]list.Item{}, delegate, 0, 0)
 	l.Title = fmt.Sprintf("S3 Bucket Explorer - %s", bucketName)
+	l.SetShowHelp(false)
+
+	// Optionally customize the list styles
+	l.Styles.Title = lipgloss.NewStyle().
+		Bold(true).
+		Foreground(lipgloss.Color("205"))
+
+	l.Styles.FilterPrompt = lipgloss.NewStyle().
+		Foreground(lipgloss.Color("205"))
+
+	l.Styles.FilterCursor = lipgloss.NewStyle().
+		Foreground(lipgloss.Color("205"))
 	l.SetShowHelp(false)
 
 	cfg, err := config.LoadDefaultConfig(context.TODO())
@@ -205,23 +231,20 @@ func (m Model) loadItems() tea.Msg {
 
 	// Process common prefixes (directories)
 	for _, prefix := range output.CommonPrefixes {
-		items = append(items, item{
-			key:   *prefix.Prefix,
-			isDir: true,
-		})
+		if prefix.Prefix != nil && *prefix.Prefix != "" {
+			items = append(items, item{
+				key:   *prefix.Prefix,
+				isDir: true,
+			})
+		}
 	}
-
 	// Process files
 	for _, obj := range output.Contents {
-		if *obj.Key == m.currentPrefix {
+		if obj.Key == nil || *obj.Key == "" || *obj.Key == m.currentPrefix {
 			continue
 		}
 
 		if strings.Contains(strings.TrimPrefix(*obj.Key, m.currentPrefix), "/") {
-			continue
-		}
-
-		if *obj.Key == "" {
 			continue
 		}
 
@@ -252,6 +275,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.nextPageToken = msg.nextToken
 		m.loading = false
 		m.list.SetItems(msg.items)
+		m.list.SetHeight(len(msg.items))
 
 		if len(msg.items) == 0 {
 			m.statusMsg = "Directory is empty"
@@ -303,6 +327,11 @@ func main() {
 	if len(os.Args) < 2 {
 		fmt.Println("Please provide a bucket name")
 		os.Exit(1)
+	}
+	if os.Getenv("DEBUG") == "true" {
+		f, _ := tea.LogToFile("log.txt", "debug")
+		logger.Initialize(f)
+		defer f.Close()
 	}
 
 	bucketName := os.Args[1]
