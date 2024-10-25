@@ -16,6 +16,7 @@ import (
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/dustin/go-humanize"
 	"github.com/mtyurt/s3n/logger"
 )
 
@@ -66,7 +67,7 @@ func (i item) Description() string {
 	if i.isDir {
 		return "Directory"
 	}
-	return fmt.Sprintf("Size: %d bytes, Modified: %s", i.size, i.modified.Format("2006-01-02 15:04:05"))
+	return fmt.Sprintf("%s, Modified: %s", humanize.Bytes(uint64(i.size)), i.modified.Format("2006-01-02 15:04:05"))
 }
 
 func (i item) FilterValue() string {
@@ -162,28 +163,28 @@ func newKeyMap() keyMap {
 
 func initialModel(bucketName string) Model {
 	keys := newKeyMap()
-	// Create a custom delegate
-	delegate := list.NewDefaultDelegate()
 
-	// Only show items that have a non-empty key
+	delegate := list.NewDefaultDelegate()
 	delegate.ShowDescription = true
+	delegate.SetSpacing(1)
 
 	// Create the list with empty items initially
 	l := list.New([]list.Item{}, delegate, 0, 0)
-	l.Title = fmt.Sprintf("S3 Bucket Explorer - %s", bucketName)
+	l.SetShowTitle(true)
+	l.Title = fmt.Sprintf("%s", bucketName)
 	l.SetShowHelp(false)
 
 	// Optionally customize the list styles
 	l.Styles.Title = lipgloss.NewStyle().
 		Bold(true).
-		Foreground(lipgloss.Color("205"))
+		Foreground(lipgloss.Color("205")).
+		Padding(1, 0)
 
 	l.Styles.FilterPrompt = lipgloss.NewStyle().
 		Foreground(lipgloss.Color("205"))
 
 	l.Styles.FilterCursor = lipgloss.NewStyle().
 		Foreground(lipgloss.Color("205"))
-	l.SetShowHelp(false)
 
 	cfg, err := config.LoadDefaultConfig(context.TODO())
 	if err != nil {
@@ -274,9 +275,9 @@ func (m Model) loadItems() tea.Msg {
 
 func (m *Model) updateTitle() {
 	if m.currentPrefix == "" {
-		m.list.Title = fmt.Sprintf("S3 Bucket Explorer - %s", m.bucketName)
+		m.list.Title = fmt.Sprintf("%s", m.bucketName)
 	} else {
-		m.list.Title = fmt.Sprintf("S3 Bucket Explorer - %s/%s", m.bucketName, m.currentPrefix)
+		m.list.Title = fmt.Sprintf("%s/%s", m.bucketName, m.currentPrefix)
 	}
 }
 
@@ -317,6 +318,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if i, ok := m.list.SelectedItem().(item); ok && i.isDir {
 				m.loading = true
 				m.currentPrefix = i.key
+				m.updateTitle()
 				return m, tea.Batch(
 					m.loadItems,
 				)
@@ -335,6 +337,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				} else {
 					m.currentPrefix = ""
 				}
+				m.updateTitle()
 				return m, tea.Batch(
 					m.loadItems,
 				)
@@ -358,6 +361,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m *Model) updateListSize(width, height int) {
 	h, v := docStyle.GetFrameSize()
 	m.list.SetSize(width-h, height-v)
+	// titleStyle := m.list.Styles.Title.Width(width - h)
+	// m.list.Styles.Title = titleStyle
+
 }
 
 func (m Model) View() string {
@@ -370,7 +376,7 @@ func (m Model) View() string {
 		view = fmt.Sprintf("%s\n\n%s", view, m.statusMsg)
 	}
 
-	return docStyle.Render(view)
+	return m.list.Styles.Title.Render(m.list.Title) + "\n" + docStyle.Render(view)
 }
 func (m *Model) showStatusMessage(msg string) {
 	m.statusMsg = msg
