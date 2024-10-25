@@ -38,6 +38,7 @@ type Model struct {
 	statusMsg      string
 	showStatusMsg  bool
 	statusMsgTimer int
+	lastWindowSize tea.WindowSizeMsg
 }
 
 type item struct {
@@ -292,6 +293,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.loading = false
 		m.list.SetItems(msg.items)
 		m.list.SetHeight(len(msg.items))
+		if m.lastWindowSize.Width > 0 && m.lastWindowSize.Height > 0 {
+			m.updateListSize(m.lastWindowSize.Width, m.lastWindowSize.Height)
+		}
 
 		if len(msg.items) == 0 {
 			m.statusMsg = "Directory is empty"
@@ -342,13 +346,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			)
 		}
 	case tea.WindowSizeMsg:
-		h, v := docStyle.GetFrameSize()
-		m.list.SetSize(msg.Width-h, msg.Height-v)
+		m.lastWindowSize = msg
+		m.updateListSize(msg.Width, msg.Height)
 	}
 
 	var cmd tea.Cmd
 	m.list, cmd = m.list.Update(msg)
 	return m, cmd
+}
+
+func (m *Model) updateListSize(width, height int) {
+	h, v := docStyle.GetFrameSize()
+	m.list.SetSize(width-h, height-v)
 }
 
 func (m Model) View() string {
