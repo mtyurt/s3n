@@ -23,31 +23,33 @@ import (
 const PAGE_SIZE = 100
 
 type Model struct {
-	list           list.Model
-	help           help.Model
-	keys           keyMap
-	client         *s3.Client
-	bucketName     string
-	currentPrefix  string
-	viewport       viewport.Model
-	viewingFile    bool
-	editingFile    bool
-	loading        bool
-	nextPageToken  *string
-	hasMoreItems   bool
-	currentItems   []list.Item
-	statusMsg      string
-	showStatusMsg  bool
-	statusMsgTimer int
-	lastWindowSize tea.WindowSizeMsg
+	list            list.Model
+	help            help.Model
+	keys            keyMap
+	client          *s3.Client
+	bucketName      string
+	currentPrefix   string
+	viewport        viewport.Model
+	viewingFile     bool
+	editingFile     bool
+	loading         bool
+	nextPageToken   *string
+	hasMoreItems    bool
+	currentItems    []list.Item
+	statusMsg       string
+	showStatusMsg   bool
+	statusMsgTimer  int
+	lastWindowSize  tea.WindowSizeMsg
+	showContentType bool
 }
 
 type item struct {
-	key        string // full path for navigation
-	displayKey string // relative path for display
-	size       int64
-	modified   time.Time
-	isDir      bool
+	key         string // full path for navigation
+	displayKey  string // relative path for display
+	contentType string
+	size        int64
+	modified    time.Time
+	isDir       bool
 }
 
 func (i item) Title() string {
@@ -67,7 +69,11 @@ func (i item) Description() string {
 	if i.isDir {
 		return "Directory"
 	}
-	return fmt.Sprintf("%s, Modified: %s", humanize.Bytes(uint64(i.size)), i.modified.Format("2006-01-02 15:04:05"))
+	d := fmt.Sprintf("%s, Modified: %s", humanize.Bytes(uint64(i.size)), i.modified.Format("2006-01-02 15:04:05"))
+	if i.contentType != "" {
+		d += fmt.Sprintf(", Content-Type: %s", i.contentType)
+	}
+	return d
 }
 
 func (i item) FilterValue() string {
@@ -256,13 +262,25 @@ func (m Model) loadItems() tea.Msg {
 		if strings.Contains(relativePath, "/") {
 			continue
 		}
+		// Get content type using HeadObject
+		headInput := &s3.HeadObjectInput{
+			Bucket: &m.bucketName,
+			Key:    obj.Key,
+		}
 
+		contentType := ""
+		if m.showContentType {
+			if headOutput, err := m.client.HeadObject(context.TODO(), headInput); err == nil && headOutput.ContentType != nil {
+				contentType = *headOutput.ContentType
+			}
+		}
 		items = append(items, item{
-			key:        *obj.Key, // Keep the full path for consistency
-			size:       *obj.Size,
-			displayKey: relativePath,
-			modified:   *obj.LastModified,
-			isDir:      false,
+			key:         *obj.Key, // Keep the full path for consistency
+			size:        *obj.Size,
+			contentType: contentType,
+			displayKey:  relativePath,
+			modified:    *obj.LastModified,
+			isDir:       false,
 		})
 	}
 
