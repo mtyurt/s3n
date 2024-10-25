@@ -41,20 +41,21 @@ type Model struct {
 }
 
 type item struct {
-	key      string
-	size     int64
-	modified time.Time
-	isDir    bool
+	key        string // full path for navigation
+	displayKey string // relative path for display
+	size       int64
+	modified   time.Time
+	isDir      bool
 }
 
 func (i item) Title() string {
-	if i.key == "" {
+	if i.displayKey == "" {
 		return "" // Don't show empty items
 	}
 	if i.isDir {
-		return "📁 " + i.key
+		return "📁 " + i.displayKey
 	}
-	return "📄 " + i.key
+	return "📄 " + i.displayKey
 }
 
 func (i item) Description() string {
@@ -212,7 +213,6 @@ type itemsLoadedMsg struct {
 	nextToken *string
 }
 
-// Modified to return a proper tea.Cmd
 func (m Model) loadItems() tea.Msg {
 	input := &s3.ListObjectsV2Input{
 		Bucket:            &m.bucketName,
@@ -231,28 +231,36 @@ func (m Model) loadItems() tea.Msg {
 
 	// Process common prefixes (directories)
 	for _, prefix := range output.CommonPrefixes {
-		if prefix.Prefix != nil && *prefix.Prefix != "" {
+		if prefix.Prefix != nil && *prefix.Prefix != "" && *prefix.Prefix != m.currentPrefix {
+			relativePath := strings.TrimPrefix(*prefix.Prefix, m.currentPrefix)
+			// Remove trailing slash from display
+			relativePath = strings.TrimSuffix(relativePath, "/")
+
 			items = append(items, item{
-				key:   *prefix.Prefix,
-				isDir: true,
+				key:        *prefix.Prefix, // Keep full path for navigation
+				displayKey: relativePath,   // Use relative path for display
+				isDir:      true,
 			})
 		}
 	}
+
 	// Process files
 	for _, obj := range output.Contents {
 		if obj.Key == nil || *obj.Key == "" || *obj.Key == m.currentPrefix {
 			continue
 		}
 
-		if strings.Contains(strings.TrimPrefix(*obj.Key, m.currentPrefix), "/") {
+		relativePath := strings.TrimPrefix(*obj.Key, m.currentPrefix)
+		if strings.Contains(relativePath, "/") {
 			continue
 		}
 
 		items = append(items, item{
-			key:      *obj.Key,
-			size:     *obj.Size,
-			modified: *obj.LastModified,
-			isDir:    false,
+			key:        *obj.Key, // Keep the full path for consistency
+			size:       *obj.Size,
+			displayKey: relativePath,
+			modified:   *obj.LastModified,
+			isDir:      false,
 		})
 	}
 
@@ -260,6 +268,14 @@ func (m Model) loadItems() tea.Msg {
 		items:     items,
 		hasMore:   *output.IsTruncated,
 		nextToken: output.NextContinuationToken,
+	}
+}
+
+func (m *Model) updateTitle() {
+	if m.currentPrefix == "" {
+		m.list.Title = fmt.Sprintf("S3 Bucket Explorer - %s", m.bucketName)
+	} else {
+		m.list.Title = fmt.Sprintf("S3 Bucket Explorer - %s/%s", m.bucketName, m.currentPrefix)
 	}
 }
 
@@ -293,8 +309,38 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyMsg:
 		if msg.String() == "ctrl+c" {
 			return m, tea.Quit
+		} else if key.Matches(msg, m.keys.Enter) {
+			if i, ok := m.list.SelectedItem().(item); ok && i.isDir {
+				m.loading = true
+				m.currentPrefix = i.key
+				return m, tea.Batch(
+					m.loadItems,
+				)
+			}
+		} else if key.Matches(msg, m.keys.Back) {
+			if m.currentPrefix != "" {
+				m.loading = true
+				// Remove the last directory from the prefix
+				parts := strings.Split(strings.TrimSuffix(m.currentPrefix, "/"), "/")
+				if len(parts) > 0 {
+					parts = parts[:len(parts)-1]
+					m.currentPrefix = strings.Join(parts, "/")
+					if m.currentPrefix != "" {
+						m.currentPrefix += "/"
+					}
+				} else {
+					m.currentPrefix = ""
+				}
+				return m, tea.Batch(
+					m.loadItems,
+				)
+			}
+		} else if key.Matches(msg, m.keys.Reload) {
+			m.loading = true
+			return m, tea.Batch(
+				m.loadItems,
+			)
 		}
-
 	case tea.WindowSizeMsg:
 		h, v := docStyle.GetFrameSize()
 		m.list.SetSize(msg.Width-h, msg.Height-v)
