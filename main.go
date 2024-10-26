@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"log"
 	"os"
 	"strings"
 	"time"
@@ -197,7 +198,13 @@ func initialModel(bucketName string) Model {
 		panic(err)
 	}
 
-	client := s3.NewFromConfig(cfg)
+	log.Println("Initiate s3 config")
+
+	client := s3.NewFromConfig(cfg, func(o *s3.Options) {
+		o.BaseEndpoint = aws.String("http://localhost:4566/")
+		o.UsePathStyle = true
+	})
+	log.Println("s3 config ready")
 
 	return Model{
 		list:       l,
@@ -304,6 +311,7 @@ func (m Model) Init() tea.Cmd {
 }
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	log.Println("msg: ", msg)
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
 		if msg.String() == "ctrl+c" {
