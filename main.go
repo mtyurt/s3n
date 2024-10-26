@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"strings"
@@ -14,7 +15,6 @@ import (
 	"github.com/charmbracelet/bubbles/help"
 	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/list"
-	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/dustin/go-humanize"
@@ -30,7 +30,7 @@ type Model struct {
 	client          *s3.Client
 	bucketName      string
 	currentPrefix   string
-	viewport        viewport.Model
+	view            ViewModel
 	viewingFile     bool
 	editingFile     bool
 	loading         bool
@@ -218,6 +218,7 @@ func initialModel(bucketName string) Model {
 }
 
 type statusMessageTimeoutMsg struct{}
+type viewExit struct{}
 
 var docStyle = lipgloss.NewStyle().Margin(1, 2)
 
@@ -316,7 +317,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.KeyMsg:
 		if msg.String() == "ctrl+c" {
 			return m, tea.Quit
-		} else if key.Matches(msg, m.keys.Enter) {
+		}
+		if m.viewingFile {
+			v, c := m.view.Update(msg)
+			m.view = v
+			return m, c
+		}
+		if key.Matches(msg, m.keys.Enter) {
 			if i, ok := m.list.SelectedItem().(item); ok && i.isDir {
 				m.loading = true
 				m.currentPrefix = i.key
@@ -349,11 +356,38 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Batch(
 				m.loadItems,
 			)
+		} else if key.Matches(msg, m.keys.View) {
+
+			if i, ok := m.list.SelectedItem().(item); ok {
+
+				obj, err := m.client.GetObject(context.TODO(), &s3.GetObjectInput{
+					Bucket: aws.String(m.bucketName),
+					Key:    aws.String(i.key),
+				})
+				if err != nil {
+					return m, func() tea.Msg { return err }
+				}
+
+				defer obj.Body.Close()
+				content, err := io.ReadAll(obj.Body)
+				if err != nil {
+					return m, func() tea.Msg { return err }
+				}
+
+				body := string(content)
+
+				m.view = NewView(fmt.Sprintf("%s/%s/%s", m.bucketName, m.currentPrefix, i.key), m.lastWindowSize.Width, m.lastWindowSize.Height, body)
+				m.viewingFile = true
+			}
+
 		}
+	case viewExit:
+		m.viewingFile = false
 
 	case tea.WindowSizeMsg:
 		m.lastWindowSize = msg
 		m.updateListSize(msg.Width, msg.Height)
+		m.view.Update(msg)
 	case itemsLoadedMsg:
 		m.currentItems = msg.items
 		m.hasMoreItems = msg.hasMore
@@ -374,9 +408,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.showStatusMsg = true
 
-	case viewContentMsg:
-		m.viewport.SetContent(string(msg))
-		m.viewingFile = true
 	case error:
 		m.statusMsg = fmt.Sprintf("Error: %v", msg)
 		m.showStatusMsg = true
@@ -396,6 +427,10 @@ func (m *Model) updateListSize(width, height int) {
 func (m Model) View() string {
 	if m.loading {
 		return "Loading..."
+	}
+
+	if m.viewingFile {
+		return m.view.View()
 	}
 
 	view := m.list.View()
