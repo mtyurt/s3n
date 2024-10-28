@@ -6,6 +6,7 @@ import (
 	"io"
 	"log"
 	"os"
+	"os/exec"
 	"strings"
 	"time"
 
@@ -30,8 +31,6 @@ type Model struct {
 	client          *s3.Client
 	bucketName      string
 	currentPrefix   string
-	view            ViewModel
-	viewingFile     bool
 	editingFile     bool
 	loading         bool
 	nextPageToken   *string
@@ -311,17 +310,17 @@ func (m Model) Init() tea.Cmd {
 	return m.loadItems
 }
 
+type ViewFinishedMsg struct {
+	filename string
+	err      error
+}
+
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	log.Println("msg: ", msg)
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
 		if msg.String() == "ctrl+c" {
 			return m, tea.Quit
-		}
-		if m.viewingFile {
-			v, c := m.view.Update(msg)
-			m.view = v
-			return m, c
 		}
 		if key.Matches(msg, m.keys.Enter) {
 			if i, ok := m.list.SelectedItem().(item); ok && i.isDir {
@@ -369,25 +368,29 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 
 				defer obj.Body.Close()
-				content, err := io.ReadAll(obj.Body)
+
+				metadata := fmt.Sprintf("s3://%s/%s\nMetadata: %v\nSize: %s\nLast-Modified: %s\n%s\n\n", m.bucketName, i.key, obj.Metadata, humanize.Bytes(uint64(i.size)), i.modified.Format("2006-01-02 15:04:05"), strings.Repeat("-", m.lastWindowSize.Width-10))
+
+				tmpFile, err := writeToTmpFile(metadata, obj.Body, fmt.Sprintf("%s-%s", m.bucketName, i.key))
 				if err != nil {
 					return m, func() tea.Msg { return err }
 				}
 
-				body := string(content)
+				cmd := tea.ExecProcess(exec.Command("less", tmpFile), func(err error) tea.Msg {
+					return ViewFinishedMsg{err: err, filename: tmpFile}
+				})
 
-				m.view = NewView(fmt.Sprintf("%s/%s/%s", m.bucketName, m.currentPrefix, i.key), m.lastWindowSize.Width, m.lastWindowSize.Height, body)
-				m.viewingFile = true
+				return m, cmd
 			}
 
 		}
-	case viewExit:
-		m.viewingFile = false
-
+	case ViewFinishedMsg:
+		os.Remove(msg.filename)
+		fmt.Println("View finished", msg.err)
 	case tea.WindowSizeMsg:
 		m.lastWindowSize = msg
 		m.updateListSize(msg.Width, msg.Height)
-		m.view.Update(msg)
+
 	case itemsLoadedMsg:
 		m.currentItems = msg.items
 		m.hasMoreItems = msg.hasMore
@@ -418,6 +421,26 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, cmd
 }
 
+func writeToTmpFile(metadata string, reader io.Reader, fileName string) (string, error) {
+	tmpFilePath := fmt.Sprintf("/tmp/%s", fileName)
+	tmpFile, err := os.Create(tmpFilePath)
+	if err != nil {
+		return "", fmt.Errorf("failed to create temp file: %w", err)
+	}
+	defer tmpFile.Close()
+
+	// Copy the contents of the reader to the temporary file
+	if _, err := io.WriteString(tmpFile, metadata); err != nil {
+		return "", fmt.Errorf("failed to write metadata to temp file: %w", err)
+	}
+	if _, err := io.Copy(tmpFile, reader); err != nil {
+		return "", fmt.Errorf("failed to write to temp file: %w", err)
+	}
+
+	// Return the path to the temporary file
+	return tmpFile.Name(), nil
+}
+
 func (m *Model) updateListSize(width, height int) {
 	h, v := docStyle.GetFrameSize()
 	m.list.SetSize(width-h, height-v)
@@ -427,10 +450,6 @@ func (m *Model) updateListSize(width, height int) {
 func (m Model) View() string {
 	if m.loading {
 		return "Loading..."
-	}
-
-	if m.viewingFile {
-		return m.view.View()
 	}
 
 	view := m.list.View()
