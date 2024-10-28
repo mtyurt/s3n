@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 	"os/exec"
+	"reflect"
 	"strings"
 	"time"
 
@@ -31,7 +32,7 @@ type Model struct {
 	client          *s3.Client
 	bucketName      string
 	currentPrefix   string
-	editingFile     bool
+	editFileStatus  string
 	loading         bool
 	nextPageToken   *string
 	hasMoreItems    bool
@@ -319,9 +320,10 @@ type EditFinishedMsg struct {
 	filename string
 	err      error
 }
+type EditFileTickMsg time.Time
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	log.Println("msg: ", msg)
+	log.Println(reflect.TypeOf(msg).Name()+" msg: ", msg)
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
 		if msg.String() == "ctrl+c" {
@@ -410,7 +412,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					return EditFinishedMsg{err: err, filename: tmpFile, key: i.key}
 				})
 
-				return m, cmd
+				return m, tea.Batch(cmd)
+
 			}
 		}
 	case ViewFinishedMsg:
@@ -420,12 +423,25 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if err != nil {
 			return m, func() tea.Msg { return err }
 		}
-		m.client.PutObject(context.TODO(), &s3.PutObjectInput{
+		_, err = m.client.PutObject(context.TODO(), &s3.PutObjectInput{
 			Bucket: aws.String(m.bucketName),
 			Key:    aws.String(msg.key),
 			Body:   tmp,
 		})
-		os.Remove(msg.filename)
+		if err != nil {
+			return m, func() tea.Msg { return err }
+		}
+		m.editFileStatus = fmt.Sprintf(" → Uploaded %s to %s/%s!", msg.filename, m.bucketName, msg.key)
+		err = os.Remove(msg.filename)
+		if err != nil {
+			return m, func() tea.Msg { return err }
+		}
+
+		return m, tea.Tick(time.Second*2, func(t time.Time) tea.Msg {
+			return EditFileTickMsg(t)
+		})
+	case EditFileTickMsg:
+		m.editFileStatus = ""
 
 	case tea.WindowSizeMsg:
 		m.lastWindowSize = msg
@@ -496,7 +512,11 @@ func (m Model) View() string {
 
 	view := m.list.View()
 	if m.showStatusMsg {
-		view = fmt.Sprintf("%s\n\n%s", view, m.statusMsg)
+		statusMsg := m.statusMsg
+		if m.editFileStatus != "" {
+			statusMsg = m.editFileStatus
+		}
+		view = fmt.Sprintf("%s\n\n%s", view, statusMsg)
 	}
 
 	return m.list.Styles.Title.Render(m.list.Title) + "\n" + docStyle.Render(view)
