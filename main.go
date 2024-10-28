@@ -314,6 +314,11 @@ type ViewFinishedMsg struct {
 	filename string
 	err      error
 }
+type EditFinishedMsg struct {
+	key      string
+	filename string
+	err      error
+}
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	log.Println("msg: ", msg)
@@ -382,11 +387,46 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 				return m, cmd
 			}
+		} else if key.Matches(msg, m.keys.Edit) {
 
+			if i, ok := m.list.SelectedItem().(item); ok {
+
+				obj, err := m.client.GetObject(context.TODO(), &s3.GetObjectInput{
+					Bucket: aws.String(m.bucketName),
+					Key:    aws.String(i.key),
+				})
+				if err != nil {
+					return m, func() tea.Msg { return err }
+				}
+
+				defer obj.Body.Close()
+
+				tmpFile, err := writeToTmpFile("", obj.Body, fmt.Sprintf("%s-%s", m.bucketName, i.key))
+				if err != nil {
+					return m, func() tea.Msg { return err }
+				}
+
+				cmd := tea.ExecProcess(exec.Command(os.Getenv("EDITOR"), tmpFile), func(err error) tea.Msg {
+					return EditFinishedMsg{err: err, filename: tmpFile, key: i.key}
+				})
+
+				return m, cmd
+			}
 		}
 	case ViewFinishedMsg:
 		os.Remove(msg.filename)
-		fmt.Println("View finished", msg.err)
+	case EditFinishedMsg:
+		tmp, err := os.Open(msg.filename)
+		if err != nil {
+			return m, func() tea.Msg { return err }
+		}
+		m.client.PutObject(context.TODO(), &s3.PutObjectInput{
+			Bucket: aws.String(m.bucketName),
+			Key:    aws.String(msg.key),
+			Body:   tmp,
+		})
+		os.Remove(msg.filename)
+
 	case tea.WindowSizeMsg:
 		m.lastWindowSize = msg
 		m.updateListSize(msg.Width, msg.Height)
@@ -430,8 +470,10 @@ func writeToTmpFile(metadata string, reader io.Reader, fileName string) (string,
 	defer tmpFile.Close()
 
 	// Copy the contents of the reader to the temporary file
-	if _, err := io.WriteString(tmpFile, metadata); err != nil {
-		return "", fmt.Errorf("failed to write metadata to temp file: %w", err)
+	if metadata != "" {
+		if _, err := io.WriteString(tmpFile, metadata); err != nil {
+			return "", fmt.Errorf("failed to write metadata to temp file: %w", err)
+		}
 	}
 	if _, err := io.Copy(tmpFile, reader); err != nil {
 		return "", fmt.Errorf("failed to write to temp file: %w", err)
