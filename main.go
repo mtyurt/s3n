@@ -87,7 +87,6 @@ type keyMap struct {
 	Enter     key.Binding
 	Back      key.Binding
 	Edit      key.Binding
-	View      key.Binding
 	Quit      key.Binding
 	Help      key.Binding
 	Reload    key.Binding
@@ -98,13 +97,13 @@ type keyMap struct {
 }
 
 func (k keyMap) ShortHelp() []key.Binding {
-	return []key.Binding{k.Up, k.Down, k.Enter, k.Back, k.Edit, k.View, k.NextPage, k.PrevPage}
+	return []key.Binding{k.Up, k.Down, k.Enter, k.Back, k.Edit, k.NextPage, k.PrevPage}
 }
 
 func (k keyMap) FullHelp() [][]key.Binding {
 	return [][]key.Binding{
 		{k.Up, k.Down, k.Enter},
-		{k.Back, k.Edit, k.View},
+		{k.Back, k.Edit},
 		{k.NextPage, k.PrevPage, k.FirstPage},
 		{k.LastPage, k.Reload, k.Help},
 		{k.Quit},
@@ -132,10 +131,6 @@ func newKeyMap() keyMap {
 		Edit: key.NewBinding(
 			key.WithKeys("ctrl+e"),
 			key.WithHelp("ctrl+e", "edit file"),
-		),
-		View: key.NewBinding(
-			key.WithKeys("ctrl+v"),
-			key.WithHelp("ctrl+v", "view file"),
 		),
 		Quit: key.NewBinding(
 			key.WithKeys("q", "ctrl+c"),
@@ -337,6 +332,31 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, tea.Batch(
 					m.loadItems,
 				)
+			} else if !i.isDir {
+
+				obj, err := m.client.GetObject(context.TODO(), &s3.GetObjectInput{
+					Bucket: aws.String(m.bucketName),
+					Key:    aws.String(i.key),
+				})
+				if err != nil {
+					return m, func() tea.Msg { return err }
+				}
+
+				defer obj.Body.Close()
+
+				metadata := fmt.Sprintf("s3://%s/%s\nMetadata: %v\nSize: %s\nLast-Modified: %s\n%s\n\n", m.bucketName, i.key, obj.Metadata, humanize.Bytes(uint64(i.size)), i.modified.Format("2006-01-02 15:04:05"), strings.Repeat("-", m.lastWindowSize.Width-10))
+
+				tmpFile, err := writeToTmpFile(metadata, obj.Body, fmt.Sprintf("%s-%s", m.bucketName, i.key))
+				if err != nil {
+					return m, func() tea.Msg { return err }
+				}
+
+				cmd := tea.ExecProcess(exec.Command("less", tmpFile), func(err error) tea.Msg {
+					return ViewFinishedMsg{err: err, filename: tmpFile}
+				})
+
+				return m, cmd
+
 			}
 		} else if key.Matches(msg, m.keys.Back) {
 			if m.currentPrefix != "" {
@@ -362,33 +382,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Batch(
 				m.loadItems,
 			)
-		} else if key.Matches(msg, m.keys.View) {
-
-			if i, ok := m.list.SelectedItem().(item); ok {
-
-				obj, err := m.client.GetObject(context.TODO(), &s3.GetObjectInput{
-					Bucket: aws.String(m.bucketName),
-					Key:    aws.String(i.key),
-				})
-				if err != nil {
-					return m, func() tea.Msg { return err }
-				}
-
-				defer obj.Body.Close()
-
-				metadata := fmt.Sprintf("s3://%s/%s\nMetadata: %v\nSize: %s\nLast-Modified: %s\n%s\n\n", m.bucketName, i.key, obj.Metadata, humanize.Bytes(uint64(i.size)), i.modified.Format("2006-01-02 15:04:05"), strings.Repeat("-", m.lastWindowSize.Width-10))
-
-				tmpFile, err := writeToTmpFile(metadata, obj.Body, fmt.Sprintf("%s-%s", m.bucketName, i.key))
-				if err != nil {
-					return m, func() tea.Msg { return err }
-				}
-
-				cmd := tea.ExecProcess(exec.Command("less", tmpFile), func(err error) tea.Msg {
-					return ViewFinishedMsg{err: err, filename: tmpFile}
-				})
-
-				return m, cmd
-			}
 		} else if key.Matches(msg, m.keys.Edit) {
 
 			if i, ok := m.list.SelectedItem().(item); ok {
