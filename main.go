@@ -25,6 +25,11 @@ import (
 
 const PAGE_SIZE = 100
 
+var (
+	helpStyleKey = lipgloss.NewStyle().Foreground(lipgloss.Color("#9B9BCC")).Bold(true)
+	helpStyleVal = lipgloss.NewStyle().Foreground(lipgloss.Color("#9B9B9B"))
+)
+
 type Model struct {
 	list            list.Model
 	help            help.Model
@@ -173,8 +178,10 @@ func initialModel(bucketName string) Model {
 	// Create the list with empty items initially
 	l := list.New([]list.Item{}, delegate, 0, 0)
 	l.SetShowTitle(true)
+	l.SetShowStatusBar(true)
+	l.SetStatusBarItemName("object", "objects")
 	l.Title = fmt.Sprintf("%s", bucketName)
-	l.SetShowHelp(false)
+	l.SetShowHelp(true)
 
 	// Optionally customize the list styles
 	l.Styles.Title = lipgloss.NewStyle().
@@ -193,13 +200,11 @@ func initialModel(bucketName string) Model {
 		panic(err)
 	}
 
-	log.Println("Initiate s3 config")
-
 	client := s3.NewFromConfig(cfg, func(o *s3.Options) {
 		o.BaseEndpoint = aws.String("http://localhost:4566/")
 		o.UsePathStyle = true
 	})
-	log.Println("s3 config ready")
+	log.Println("s3 config initiated")
 
 	return Model{
 		list:       l,
@@ -208,7 +213,6 @@ func initialModel(bucketName string) Model {
 		loading:    true,
 		client:     client,
 		bucketName: bucketName,
-		// viewport:   viewport.New(0, 0),
 	}
 }
 
@@ -446,7 +450,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.nextPageToken = msg.nextToken
 		m.loading = false
 		m.list.SetItems(msg.items)
-		m.list.SetHeight(len(msg.items))
 		if m.lastWindowSize.Width > 0 && m.lastWindowSize.Height > 0 {
 			m.updateListSize(m.lastWindowSize.Width, m.lastWindowSize.Height)
 		}
@@ -494,8 +497,20 @@ func writeToTmpFile(metadata string, reader io.Reader, fileName string) (string,
 
 func (m *Model) updateListSize(width, height int) {
 	h, v := docStyle.GetFrameSize()
-	m.list.SetSize(width-h, height-v)
+	m.list.SetSize(width-h, height-v-3)
 
+}
+
+func (m Model) footerView() {
+	help := map[string]string{
+		"enter":       "view file/directory",
+		"ctrl+e":      "edit file",
+		"backspace/h": "go parent directory",
+	}
+	fields := []string{}
+	for k, v := range help {
+		fields = append(fields, fmt.Sprintf("%s %s", helpStyleKey.Render(k), helpStyleVal.Render(v)))
+	}
 }
 
 func (m Model) View() string {
@@ -503,16 +518,16 @@ func (m Model) View() string {
 		return "Loading..."
 	}
 
-	view := m.list.View()
-	if m.showStatusMsg {
-		statusMsg := m.statusMsg
-		if m.editFileStatus != "" {
-			statusMsg = m.editFileStatus
-		}
-		view = fmt.Sprintf("%s\n\n%s", view, statusMsg)
-	}
-
-	return m.list.Styles.Title.Render(m.list.Title) + "\n" + docStyle.Render(view)
+	// statusMsg := ""
+	// if m.showStatusMsg {
+	// 	statusMsg = m.statusMsg
+	// 	if m.editFileStatus != "" {
+	// 		statusMsg = m.editFileStatus
+	// 	}
+	// }
+	// statusMsg = ""
+	return m.list.View()
+	// return lipgloss.JoinVertical(lipgloss.Top, m.list.View(), docStyle.Render(statusMsg))
 }
 func (m *Model) showStatusMessage(msg string) {
 	m.statusMsg = msg
