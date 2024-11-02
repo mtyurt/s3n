@@ -44,7 +44,6 @@ type Model struct {
 	currentItems    []list.Item
 	statusMsg       string
 	showStatusMsg   bool
-	statusMsgTimer  int
 	lastWindowSize  tea.WindowSizeMsg
 	showContentType bool
 }
@@ -497,20 +496,8 @@ func writeToTmpFile(metadata string, reader io.Reader, fileName string) (string,
 
 func (m *Model) updateListSize(width, height int) {
 	h, v := docStyle.GetFrameSize()
-	m.list.SetSize(width-h, height-v-3)
+	m.list.SetSize(width-h, height-v-1)
 
-}
-
-func (m Model) footerView() {
-	help := map[string]string{
-		"enter":       "view file/directory",
-		"ctrl+e":      "edit file",
-		"backspace/h": "go parent directory",
-	}
-	fields := []string{}
-	for k, v := range help {
-		fields = append(fields, fmt.Sprintf("%s %s", helpStyleKey.Render(k), helpStyleVal.Render(v)))
-	}
 }
 
 func (m Model) View() string {
@@ -518,21 +505,15 @@ func (m Model) View() string {
 		return "Loading..."
 	}
 
-	// statusMsg := ""
-	// if m.showStatusMsg {
-	// 	statusMsg = m.statusMsg
-	// 	if m.editFileStatus != "" {
-	// 		statusMsg = m.editFileStatus
-	// 	}
-	// }
-	// statusMsg = ""
-	return m.list.View()
-	// return lipgloss.JoinVertical(lipgloss.Top, m.list.View(), docStyle.Render(statusMsg))
-}
-func (m *Model) showStatusMessage(msg string) {
-	m.statusMsg = msg
-	m.showStatusMsg = true
-	m.statusMsgTimer = 2 // Display for 2 updates
+	statusMsg := ""
+	if m.showStatusMsg {
+		statusMsg = m.statusMsg
+		if m.editFileStatus != "" {
+			statusMsg = m.editFileStatus
+		}
+	}
+	// return m.list.View()
+	return lipgloss.JoinVertical(lipgloss.Top, m.list.View(), docStyle.Render(statusMsg))
 }
 
 func main() {
