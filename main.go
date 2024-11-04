@@ -86,44 +86,15 @@ func (i item) FilterValue() string {
 }
 
 type keyMap struct {
-	Up        key.Binding
-	Down      key.Binding
-	Enter     key.Binding
-	Back      key.Binding
-	Edit      key.Binding
-	Quit      key.Binding
-	Help      key.Binding
-	Reload    key.Binding
-	NextPage  key.Binding
-	PrevPage  key.Binding
-	FirstPage key.Binding
-	LastPage  key.Binding
-}
-
-func (k keyMap) ShortHelp() []key.Binding {
-	return []key.Binding{k.Up, k.Down, k.Enter, k.Back, k.Edit, k.NextPage, k.PrevPage}
-}
-
-func (k keyMap) FullHelp() [][]key.Binding {
-	return [][]key.Binding{
-		{k.Up, k.Down, k.Enter},
-		{k.Back, k.Edit},
-		{k.NextPage, k.PrevPage, k.FirstPage},
-		{k.LastPage, k.Reload, k.Help},
-		{k.Quit},
-	}
+	Enter  key.Binding
+	Back   key.Binding
+	Edit   key.Binding
+	Quit   key.Binding
+	Reload key.Binding
 }
 
 func newKeyMap() keyMap {
 	return keyMap{
-		Up: key.NewBinding(
-			key.WithKeys("up", "k"),
-			key.WithHelp("↑/k", "up"),
-		),
-		Down: key.NewBinding(
-			key.WithKeys("down", "j"),
-			key.WithHelp("↓/j", "down"),
-		),
 		Enter: key.NewBinding(
 			key.WithKeys("enter"),
 			key.WithHelp("enter", "enter dir/view file"),
@@ -140,30 +111,22 @@ func newKeyMap() keyMap {
 			key.WithKeys("q", "ctrl+c"),
 			key.WithHelp("q", "quit"),
 		),
-		Help: key.NewBinding(
-			key.WithKeys("?"),
-			key.WithHelp("?", "toggle help"),
-		),
 		Reload: key.NewBinding(
 			key.WithKeys("ctrl+r"),
 			key.WithHelp("ctrl+r", "reload"),
 		),
-		NextPage: key.NewBinding(
-			key.WithKeys("n", "pgdown"),
-			key.WithHelp("n/pgdown", "next page"),
-		),
-		PrevPage: key.NewBinding(
-			key.WithKeys("p", "pgup"),
-			key.WithHelp("p/pgup", "previous page"),
-		),
-		FirstPage: key.NewBinding(
-			key.WithKeys("home"),
-			key.WithHelp("home", "first page"),
-		),
-		LastPage: key.NewBinding(
-			key.WithKeys("end"),
-			key.WithHelp("end", "last page"),
-		),
+	}
+}
+
+func shortHelpKeys(keys keyMap) func() []key.Binding {
+	return func() []key.Binding {
+		return []key.Binding{
+			keys.Enter,
+			keys.Back,
+			keys.Edit,
+			keys.Reload,
+		}
+
 	}
 }
 
@@ -181,6 +144,7 @@ func initialModel(bucketName string) Model {
 	l.SetStatusBarItemName("object", "objects")
 	l.Title = fmt.Sprintf("%s", bucketName)
 	l.SetShowHelp(true)
+	l.AdditionalFullHelpKeys = shortHelpKeys(keys)
 
 	// Optionally customize the list styles
 	l.Styles.Title = lipgloss.NewStyle().
@@ -389,6 +353,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 			if i, ok := m.list.SelectedItem().(item); ok {
 
+				if i.isDir {
+					// m.statusMsg = "Cannot edit a directory"
+					return m, nil
+				}
+
 				obj, err := m.client.GetObject(context.TODO(), &s3.GetObjectInput{
 					Bucket: aws.String(m.bucketName),
 					Key:    aws.String(i.key),
@@ -408,7 +377,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					return EditFinishedMsg{err: err, filename: tmpFile, key: i.key}
 				})
 
-				return m, tea.Batch(cmd)
+				return m, cmd
 
 			}
 		}
