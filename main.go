@@ -4,10 +4,8 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"log"
 	"os"
 	"os/exec"
-	"reflect"
 	"strings"
 	"time"
 
@@ -17,6 +15,7 @@ import (
 	"github.com/charmbracelet/bubbles/help"
 	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/list"
+	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/dustin/go-humanize"
@@ -46,6 +45,9 @@ type Model struct {
 	showStatusMsg   bool
 	lastWindowSize  tea.WindowSizeMsg
 	showContentType bool
+	newFile         bool
+	newFileName     string
+	newFileInput    *textinput.Model
 }
 
 type item struct {
@@ -91,6 +93,7 @@ type keyMap struct {
 	Edit   key.Binding
 	Quit   key.Binding
 	Reload key.Binding
+	Add    key.Binding
 }
 
 func newKeyMap() keyMap {
@@ -115,6 +118,10 @@ func newKeyMap() keyMap {
 			key.WithKeys("ctrl+r"),
 			key.WithHelp("ctrl+r", "reload"),
 		),
+		Add: key.NewBinding(
+			key.WithKeys("ctrl+a"),
+			key.WithHelp("ctrl+a", "add new file"),
+		),
 	}
 }
 
@@ -125,6 +132,7 @@ func shortHelpKeys(keys keyMap) func() []key.Binding {
 			keys.Back,
 			keys.Edit,
 			keys.Reload,
+			keys.Add,
 		}
 
 	}
@@ -163,11 +171,15 @@ func initialModel(bucketName string) Model {
 		panic(err)
 	}
 
-	client := s3.NewFromConfig(cfg, func(o *s3.Options) {
-		o.BaseEndpoint = aws.String("http://localhost:4566/")
-		o.UsePathStyle = true
-	})
-	log.Println("s3 config initiated")
+	var client *s3.Client
+	if os.Getenv("LOCAL_AWS") != "" {
+		client = s3.NewFromConfig(cfg, func(o *s3.Options) {
+			o.BaseEndpoint = aws.String("http://localhost:4566/")
+			o.UsePathStyle = true
+		})
+	} else {
+		client = s3.NewFromConfig(cfg)
+	}
 
 	return Model{
 		list:       l,
@@ -282,15 +294,38 @@ type EditFinishedMsg struct {
 	filename string
 	err      error
 }
+
+type NewFileMsg struct {
+	filename string
+}
 type EditFileTickMsg time.Time
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	log.Println(reflect.TypeOf(msg).Name()+" msg: ", msg)
+	// log.Println(reflect.TypeOf(msg).Name()+" msg: ", msg)
+	if m.newFile && m.newFileInput != nil {
+		newFileInput, cmd := m.newFileInput.Update(msg)
+		m.newFileInput = &newFileInput
+
+		switch msg := msg.(type) {
+		case tea.KeyMsg:
+			if msg.Type == tea.KeyEnter {
+				m.newFile = false
+				return m, tea.Batch(cmd, func() tea.Msg { return NewFileMsg{filename: m.newFileInput.Value()} })
+			} else if msg.Type == tea.KeyCtrlC {
+				m.newFile = false
+				m.newFileInput = nil
+				return m, nil
+			}
+
+		}
+		return m, cmd
+	}
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
 		if msg.String() == "ctrl+c" {
 			return m, tea.Quit
 		}
+
 		if key.Matches(msg, m.keys.Enter) {
 			if i, ok := m.list.SelectedItem().(item); ok && i.isDir {
 				m.loading = true
@@ -380,7 +415,30 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, cmd
 
 			}
+		} else if !m.newFile && key.Matches(msg, m.keys.Add) {
+			m.newFile = true
+			textInput := textinput.New()
+			textInput.Prompt = "New object: " + m.currentPrefix
+			if !strings.HasSuffix(m.currentPrefix, "/") {
+				textInput.Prompt += "/"
+			}
+			textInput.Focus()
+			m.newFileInput = &textInput
+			return m, textinput.Blink
 		}
+	case NewFileMsg:
+		m.newFile = false
+		fileKey := m.currentPrefix + m.newFileInput.Value()
+		tmpFile, err := writeToTmpFile("", nil, fmt.Sprintf("%s-%s", m.bucketName, strings.ReplaceAll(fileKey, "/", "_")))
+		if err != nil {
+			return m, func() tea.Msg { return err }
+		}
+
+		cmd := tea.ExecProcess(exec.Command(os.Getenv("EDITOR"), tmpFile), func(err error) tea.Msg {
+			return EditFinishedMsg{err: err, filename: tmpFile, key: fileKey}
+		})
+		return m, cmd
+
 	case ViewFinishedMsg:
 		os.Remove(msg.filename)
 	case EditFinishedMsg:
@@ -402,9 +460,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, func() tea.Msg { return err }
 		}
 
-		return m, tea.Tick(time.Second*2, func(t time.Time) tea.Msg {
+		return m, tea.Batch(m.loadItems, tea.Tick(time.Second*2, func(t time.Time) tea.Msg {
 			return EditFileTickMsg(t)
-		})
+		}))
 	case EditFileTickMsg:
 		m.editFileStatus = ""
 
@@ -455,8 +513,10 @@ func writeToTmpFile(metadata string, reader io.Reader, fileName string) (string,
 			return "", fmt.Errorf("failed to write metadata to temp file: %w", err)
 		}
 	}
-	if _, err := io.Copy(tmpFile, reader); err != nil {
-		return "", fmt.Errorf("failed to write to temp file: %w", err)
+	if reader != nil {
+		if _, err := io.Copy(tmpFile, reader); err != nil {
+			return "", fmt.Errorf("failed to write to temp file: %w", err)
+		}
 	}
 
 	// Return the path to the temporary file
@@ -469,20 +529,27 @@ func (m *Model) updateListSize(width, height int) {
 
 }
 
+func (m Model) footer() string {
+	if m.newFile && m.newFileInput != nil {
+		return m.newFileInput.View()
+
+	} else if m.showStatusMsg {
+		statusMsg := m.statusMsg
+		if m.editFileStatus != "" {
+			statusMsg = m.editFileStatus
+		}
+		return docStyle.Render(statusMsg)
+	}
+	return ""
+}
+
 func (m Model) View() string {
 	if m.loading {
 		return "Loading..."
 	}
 
-	statusMsg := ""
-	if m.showStatusMsg {
-		statusMsg = m.statusMsg
-		if m.editFileStatus != "" {
-			statusMsg = m.editFileStatus
-		}
-	}
 	// return m.list.View()
-	return lipgloss.JoinVertical(lipgloss.Top, m.list.View(), docStyle.Render(statusMsg))
+	return lipgloss.JoinVertical(lipgloss.Top, m.list.View(), m.footer())
 }
 
 func main() {
