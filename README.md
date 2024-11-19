@@ -4,9 +4,17 @@ Simple S3 object navigator
 
 # How to install
 
+- From source code:
+
 ```bash
 
 go build -o /usr/local/bin/s3n .
+```
+
+- With `go install`:
+
+```bash
+go install github.com/mtyurt/s3n@latest
 ```
 
 
