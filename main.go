@@ -348,7 +348,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 				metadata := fmt.Sprintf("s3://%s/%s\nMetadata: %v\nSize: %s\nLast-Modified: %s\n%s\n\n", m.bucketName, i.key, obj.Metadata, humanize.Bytes(uint64(i.size)), i.modified.Format("2006-01-02 15:04:05"), strings.Repeat("-", m.lastWindowSize.Width-10))
 
-				tmpFile, err := writeToTmpFile(metadata, obj.Body, fmt.Sprintf("%s-%s", m.bucketName, i.key))
+				tmpFile, err := writeToTmpFile(metadata, obj.Body, fmt.Sprintf("%s-%s", m.bucketName, strings.ReplaceAll(i.key, "/", "_")))
 				if err != nil {
 					return m, func() tea.Msg { return err }
 				}
@@ -403,7 +403,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 				defer obj.Body.Close()
 
-				tmpFile, err := writeToTmpFile("", obj.Body, fmt.Sprintf("%s-%s", m.bucketName, i.key))
+				tmpFile, err := writeToTmpFile("", obj.Body, fmt.Sprintf("%s-%s", m.bucketName, strings.ReplaceAll(i.key, "/", "_")))
 				if err != nil {
 					return m, func() tea.Msg { return err }
 				}

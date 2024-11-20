@@ -30,7 +30,7 @@ s3n <bucket-name>
 # Features
 
 1. List all objects, navigate into virtual directories using `enter` and `backspace` (hit `?` for all hotkeys)
-2. View object content with `ctrl+v` using `less` command
+2. View object content with `enter` using `less` command
 3. Edit object content with `ctrl+e` using `$EDITOR` envvar
 4. Add a new object with `ctrl+a` and edit it
 
