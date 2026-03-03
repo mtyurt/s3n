@@ -290,9 +290,10 @@ type ViewFinishedMsg struct {
 	err      error
 }
 type EditFinishedMsg struct {
-	key      string
-	filename string
-	err      error
+	key         string
+	filename    string
+	err         error
+	contentType string
 }
 
 type NewFileMsg struct {
@@ -346,7 +347,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 				defer obj.Body.Close()
 
-				metadata := fmt.Sprintf("s3://%s/%s\nMetadata: %v\nSize: %s\nLast-Modified: %s\n%s\n\n", m.bucketName, i.key, obj.Metadata, humanize.Bytes(uint64(i.size)), i.modified.Format("2006-01-02 15:04:05"), strings.Repeat("-", m.lastWindowSize.Width-10))
+				metadata := fmt.Sprintf("s3://%s/%s\nContentType: %s\nMetadata: %v\nSize: %s\nLast-Modified: %s\n%s\n\n", m.bucketName, i.key, i.contentType, obj.Metadata, humanize.Bytes(uint64(i.size)), i.modified.Format("2006-01-02 15:04:05"), strings.Repeat("-", m.lastWindowSize.Width-10))
 
 				tmpFile, err := writeToTmpFile(metadata, obj.Body, fmt.Sprintf("%s-%s", m.bucketName, strings.ReplaceAll(i.key, "/", "_")))
 				if err != nil {
@@ -409,7 +410,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 
 				cmd := tea.ExecProcess(exec.Command(os.Getenv("EDITOR"), tmpFile), func(err error) tea.Msg {
-					return EditFinishedMsg{err: err, filename: tmpFile, key: i.key}
+					return EditFinishedMsg{err: err, filename: tmpFile, key: i.key, contentType: i.contentType}
 				})
 
 				return m, cmd
@@ -435,7 +436,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 		cmd := tea.ExecProcess(exec.Command(os.Getenv("EDITOR"), tmpFile), func(err error) tea.Msg {
-			return EditFinishedMsg{err: err, filename: tmpFile, key: fileKey}
+			return EditFinishedMsg{err: err, filename: tmpFile, key: fileKey, contentType: "text/plain"}
 		})
 		return m, cmd
 
@@ -447,14 +448,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, func() tea.Msg { return err }
 		}
 		_, err = m.client.PutObject(context.TODO(), &s3.PutObjectInput{
-			Bucket: aws.String(m.bucketName),
-			Key:    aws.String(msg.key),
-			Body:   tmp,
+			Bucket:      aws.String(m.bucketName),
+			Key:         aws.String(msg.key),
+			Body:        tmp,
+			ContentType: aws.String(msg.contentType),
 		})
 		if err != nil {
 			return m, func() tea.Msg { return err }
 		}
-		m.editFileStatus = fmt.Sprintf(" → Uploaded %s to %s/%s!", msg.filename, m.bucketName, msg.key)
+		m.editFileStatus = fmt.Sprintf(" → Uploaded %s %s to %s/%s!", msg.filename, msg.contentType, m.bucketName, msg.key)
 		err = os.Remove(msg.filename)
 		if err != nil {
 			return m, func() tea.Msg { return err }
