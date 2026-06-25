@@ -33,6 +33,9 @@ s3n <bucket-name>
 2. View object content with `enter` using `less` command
 3. Edit object content with `ctrl+e` using `$EDITOR` envvar
 4. Add a new object with `ctrl+a` and edit it
+5. Delete an object with `ctrl+d` (asks for confirmation)
+6. Filter loaded objects with `/`; while filtering press `ctrl+s` to search the whole bucket server-side using the typed text as prefix (`backspace`/back exits search)
+7. Load the next page of objects with `n` when a directory has more than 100 objects
 
 # How to test locally
 

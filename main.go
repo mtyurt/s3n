@@ -48,6 +48,10 @@ type Model struct {
 	newFile         bool
 	newFileName     string
 	newFileInput    *textinput.Model
+	confirmDelete   bool
+	deleteKey       string
+	searchTerm      string
+	loadingMore     bool
 }
 
 type item struct {
@@ -88,12 +92,15 @@ func (i item) FilterValue() string {
 }
 
 type keyMap struct {
-	Enter  key.Binding
-	Back   key.Binding
-	Edit   key.Binding
-	Quit   key.Binding
-	Reload key.Binding
-	Add    key.Binding
+	Enter    key.Binding
+	Back     key.Binding
+	Edit     key.Binding
+	Quit     key.Binding
+	Reload   key.Binding
+	Add      key.Binding
+	Delete   key.Binding
+	Search   key.Binding
+	NextPage key.Binding
 }
 
 func newKeyMap() keyMap {
@@ -122,6 +129,18 @@ func newKeyMap() keyMap {
 			key.WithKeys("ctrl+a"),
 			key.WithHelp("ctrl+a", "add new file"),
 		),
+		Delete: key.NewBinding(
+			key.WithKeys("ctrl+d"),
+			key.WithHelp("ctrl+d", "delete file"),
+		),
+		Search: key.NewBinding(
+			key.WithKeys("ctrl+s"),
+			key.WithHelp("ctrl+s", "search bucket with filter prefix"),
+		),
+		NextPage: key.NewBinding(
+			key.WithKeys("n"),
+			key.WithHelp("n", "load next page"),
+		),
 	}
 }
 
@@ -133,6 +152,9 @@ func shortHelpKeys(keys keyMap) func() []key.Binding {
 			keys.Edit,
 			keys.Reload,
 			keys.Add,
+			keys.Delete,
+			keys.Search,
+			keys.NextPage,
 		}
 
 	}
@@ -204,9 +226,10 @@ type itemsLoadedMsg struct {
 }
 
 func (m Model) loadItems() tea.Msg {
+	queryPrefix := m.currentPrefix + m.searchTerm
 	input := &s3.ListObjectsV2Input{
 		Bucket:            &m.bucketName,
-		Prefix:            &m.currentPrefix,
+		Prefix:            &queryPrefix,
 		MaxKeys:           aws.Int32(PAGE_SIZE),
 		ContinuationToken: m.nextPageToken,
 		Delimiter:         aws.String("/"),
@@ -240,10 +263,11 @@ func (m Model) loadItems() tea.Msg {
 			continue
 		}
 
-		relativePath := strings.TrimPrefix(*obj.Key, m.currentPrefix)
-		if strings.Contains(relativePath, "/") {
+		// The delimiter scopes results to one level below the query prefix; skip anything deeper.
+		if strings.Contains(strings.TrimPrefix(*obj.Key, queryPrefix), "/") {
 			continue
 		}
+		relativePath := strings.TrimPrefix(*obj.Key, m.currentPrefix)
 		// Get content type using HeadObject
 		headInput := &s3.HeadObjectInput{
 			Bucket: &m.bucketName,
@@ -274,11 +298,14 @@ func (m Model) loadItems() tea.Msg {
 }
 
 func (m *Model) updateTitle() {
-	if m.currentPrefix == "" {
-		m.list.Title = fmt.Sprintf("%s", m.bucketName)
-	} else {
-		m.list.Title = fmt.Sprintf("%s/%s", m.bucketName, m.currentPrefix)
+	title := m.bucketName
+	if m.currentPrefix != "" {
+		title = fmt.Sprintf("%s/%s", m.bucketName, m.currentPrefix)
 	}
+	if m.searchTerm != "" {
+		title += fmt.Sprintf(" [search: %s]", m.searchTerm)
+	}
+	m.list.Title = title
 }
 
 func (m Model) Init() tea.Cmd {
@@ -321,16 +348,55 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, cmd
 	}
+	if m.confirmDelete {
+		if msg, ok := msg.(tea.KeyMsg); ok {
+			m.confirmDelete = false
+			if msg.String() == "y" || msg.String() == "Y" {
+				key := m.deleteKey
+				_, err := m.client.DeleteObject(context.TODO(), &s3.DeleteObjectInput{
+					Bucket: aws.String(m.bucketName),
+					Key:    aws.String(key),
+				})
+				if err != nil {
+					return m, func() tea.Msg { return err }
+				}
+				m.loading = true
+				m.statusMsg = fmt.Sprintf("Deleted %s", key)
+				m.showStatusMsg = true
+				return m, m.loadItems
+			}
+		}
+		return m, nil
+	}
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
 		if msg.String() == "ctrl+c" {
 			return m, tea.Quit
 		}
 
+		// While typing a filter, let the list handle all keys (including backspace),
+		// except the shortcut that re-runs the listing server-side with the typed prefix.
+		if m.list.FilterState() == list.Filtering {
+			if key.Matches(msg, m.keys.Search) {
+				m.searchTerm = m.list.FilterInput.Value()
+				m.list.ResetFilter()
+				m.loading = true
+				m.nextPageToken = nil
+				m.loadingMore = false
+				m.updateTitle()
+				return m, m.loadItems
+			}
+			break
+		}
+
 		if key.Matches(msg, m.keys.Enter) {
 			if i, ok := m.list.SelectedItem().(item); ok && i.isDir {
 				m.loading = true
 				m.currentPrefix = i.key
+				m.searchTerm = ""
+				m.nextPageToken = nil
+				m.loadingMore = false
+				m.list.ResetFilter()
 				m.updateTitle()
 				return m, tea.Batch(
 					m.loadItems,
@@ -362,8 +428,20 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 			}
 		} else if key.Matches(msg, m.keys.Back) {
+			if m.searchTerm != "" {
+				m.loading = true
+				m.searchTerm = ""
+				m.nextPageToken = nil
+				m.loadingMore = false
+				m.list.ResetFilter()
+				m.updateTitle()
+				return m, m.loadItems
+			}
 			if m.currentPrefix != "" {
 				m.loading = true
+				m.nextPageToken = nil
+				m.loadingMore = false
+				m.list.ResetFilter()
 				// Remove the last directory from the prefix
 				parts := strings.Split(strings.TrimSuffix(m.currentPrefix, "/"), "/")
 				if len(parts) > 0 {
@@ -382,9 +460,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		} else if key.Matches(msg, m.keys.Reload) {
 			m.loading = true
+			m.nextPageToken = nil
+			m.loadingMore = false
 			return m, tea.Batch(
 				m.loadItems,
 			)
+		} else if key.Matches(msg, m.keys.NextPage) {
+			if m.hasMoreItems && !m.loading && !m.loadingMore {
+				m.loadingMore = true
+				return m, m.loadItems
+			}
 		} else if key.Matches(msg, m.keys.Edit) {
 
 			if i, ok := m.list.SelectedItem().(item); ok {
@@ -426,6 +511,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			textInput.Focus()
 			m.newFileInput = &textInput
 			return m, textinput.Blink
+		} else if key.Matches(msg, m.keys.Delete) {
+			if i, ok := m.list.SelectedItem().(item); ok && !i.isDir {
+				m.confirmDelete = true
+				m.deleteKey = i.key
+				return m, nil
+			}
 		}
 	case NewFileMsg:
 		m.newFile = false
@@ -443,6 +534,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case ViewFinishedMsg:
 		os.Remove(msg.filename)
 	case EditFinishedMsg:
+		if msg.err != nil {
+			m.statusMsg = fmt.Sprintf("Edit cancelled, not uploaded: %v", msg.err)
+			m.showStatusMsg = true
+			os.Remove(msg.filename)
+			return m, nil
+		}
 		tmp, err := os.Open(msg.filename)
 		if err != nil {
 			return m, func() tea.Msg { return err }
@@ -473,21 +570,26 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.updateListSize(msg.Width, msg.Height)
 
 	case itemsLoadedMsg:
-		m.currentItems = msg.items
+		if m.loadingMore {
+			m.currentItems = append(m.currentItems, msg.items...)
+		} else {
+			m.currentItems = msg.items
+		}
+		m.loadingMore = false
 		m.hasMoreItems = msg.hasMore
 		m.nextPageToken = msg.nextToken
 		m.loading = false
-		m.list.SetItems(msg.items)
+		m.list.SetItems(m.currentItems)
 		if m.lastWindowSize.Width > 0 && m.lastWindowSize.Height > 0 {
 			m.updateListSize(m.lastWindowSize.Width, m.lastWindowSize.Height)
 		}
 
-		if len(msg.items) == 0 {
+		if len(m.currentItems) == 0 {
 			m.statusMsg = "Directory is empty"
 		} else if msg.hasMore {
-			m.statusMsg = fmt.Sprintf("Showing %d items (More available - press 'n' for next page)", len(msg.items))
+			m.statusMsg = fmt.Sprintf("Showing %d items (More available - press 'n' for next page)", len(m.currentItems))
 		} else {
-			m.statusMsg = fmt.Sprintf("Showing %d items (End of list)", len(msg.items))
+			m.statusMsg = fmt.Sprintf("Showing %d items (End of list)", len(m.currentItems))
 		}
 		m.showStatusMsg = true
 
@@ -532,7 +634,9 @@ func (m *Model) updateListSize(width, height int) {
 }
 
 func (m Model) footer() string {
-	if m.newFile && m.newFileInput != nil {
+	if m.confirmDelete {
+		return docStyle.Render(fmt.Sprintf("Delete %s? (y/N)", m.deleteKey))
+	} else if m.newFile && m.newFileInput != nil {
 		return m.newFileInput.View()
 
 	} else if m.showStatusMsg {
