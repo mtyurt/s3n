@@ -119,8 +119,8 @@ func newKeyMap() keyMap {
 			key.WithHelp("ctrl+e", "edit file"),
 		),
 		Quit: key.NewBinding(
-			key.WithKeys("q", "ctrl+c"),
-			key.WithHelp("q", "quit"),
+			key.WithKeys("ctrl+c"),
+			key.WithHelp("ctrl+c", "quit"),
 		),
 		Reload: key.NewBinding(
 			key.WithKeys("ctrl+r"),
@@ -156,6 +156,7 @@ func shortHelpKeys(keys keyMap) func() []key.Binding {
 			keys.Delete,
 			keys.Search,
 			keys.NextPage,
+			keys.Quit,
 		}
 
 	}
@@ -176,6 +177,9 @@ func initialModel(bucketName string) Model {
 	l.Title = fmt.Sprintf("%s", bucketName)
 	l.SetShowHelp(true)
 	l.AdditionalFullHelpKeys = shortHelpKeys(keys)
+
+	// Only ctrl+c exits (handled in Update); escape stays free to cancel filtering.
+	l.DisableQuitKeybindings()
 
 	// Optionally customize the list styles
 	l.Styles.Title = lipgloss.NewStyle().

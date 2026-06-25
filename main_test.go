@@ -12,6 +12,35 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 )
 
+func isQuit(cmd tea.Cmd) bool {
+	if cmd == nil {
+		return false
+	}
+	_, ok := cmd().(tea.QuitMsg)
+	return ok
+}
+
+func TestEscapeDoesNotQuit(t *testing.T) {
+	m := initialModel("test-bucket")
+	m.loading = false
+	m.list.SetItems([]list.Item{item{key: "a.txt", displayKey: "a.txt"}})
+
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	if isQuit(cmd) {
+		t.Errorf("escape should not quit the application")
+	}
+}
+
+func TestCtrlCQuits(t *testing.T) {
+	m := initialModel("test-bucket")
+	m.loading = false
+
+	_, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
+	if !isQuit(cmd) {
+		t.Errorf("ctrl+c should quit the application")
+	}
+}
+
 func TestEditFinishedWithErrorDoesNotUpload(t *testing.T) {
 	f, err := os.CreateTemp("", "s3n-test-*")
 	if err != nil {
