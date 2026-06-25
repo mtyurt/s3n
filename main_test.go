@@ -5,6 +5,7 @@ package main
 import (
 	"errors"
 	"os"
+	"strings"
 	"testing"
 
 	"github.com/charmbracelet/bubbles/list"
@@ -211,6 +212,44 @@ func TestItemsLoadedAppendsWhenLoadingMore(t *testing.T) {
 	}
 	if m.loadingMore {
 		t.Errorf("expected loadingMore to be reset after load")
+	}
+}
+
+func TestErrorReplacesScreen(t *testing.T) {
+	m := initialModel("test-bucket")
+	// Init sets loading = true; an initial load failure must surface, not hang on "Loading...".
+	if !m.loading {
+		t.Fatalf("expected model to start in loading state")
+	}
+
+	updated, _ := m.Update(errors.New("AccessDenied: token expired"))
+	m = updated.(Model)
+
+	if m.loading {
+		t.Errorf("expected loading to be cleared after an error")
+	}
+	if m.errMsg == "" {
+		t.Errorf("expected an error message to be recorded")
+	}
+
+	view := m.View()
+	if !strings.Contains(view, "AccessDenied: token expired") {
+		t.Errorf("expected the error to take over the screen, got %q", view)
+	}
+}
+
+func TestSuccessfulLoadClearsError(t *testing.T) {
+	m := initialModel("test-bucket")
+	m.errMsg = "AccessDenied: token expired"
+
+	updated, _ := m.Update(itemsLoadedMsg{
+		items:   []list.Item{item{key: "a.txt", displayKey: "a.txt"}},
+		hasMore: false,
+	})
+	m = updated.(Model)
+
+	if m.errMsg != "" {
+		t.Errorf("expected error to be cleared after a successful load, got %q", m.errMsg)
 	}
 }
 

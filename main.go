@@ -52,6 +52,7 @@ type Model struct {
 	deleteKey       string
 	searchTerm      string
 	loadingMore     bool
+	errMsg          string
 }
 
 type item struct {
@@ -576,6 +577,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.currentItems = msg.items
 		}
 		m.loadingMore = false
+		m.errMsg = ""
 		m.hasMoreItems = msg.hasMore
 		m.nextPageToken = msg.nextToken
 		m.loading = false
@@ -594,8 +596,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.showStatusMsg = true
 
 	case error:
-		m.statusMsg = fmt.Sprintf("Error: %v", msg)
-		m.showStatusMsg = true
+		m.loading = false
+		m.loadingMore = false
+		m.errMsg = msg.Error()
 	}
 
 	var cmd tea.Cmd
@@ -652,6 +655,10 @@ func (m Model) footer() string {
 func (m Model) View() string {
 	if m.loading {
 		return "Loading..."
+	}
+
+	if m.errMsg != "" {
+		return docStyle.Render(fmt.Sprintf("Error: %s\n\nPress ctrl+r to retry, q to quit.", m.errMsg))
 	}
 
 	// return m.list.View()
